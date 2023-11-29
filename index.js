@@ -292,6 +292,14 @@ async function run() {
       });
     });
 
+
+    // stats or analytics
+    app.get('/admin-states', async(req, res)=>{
+      const users = await userCollection.estimatedDocumentCount();
+      const survey = await surveysCollection.estimatedDocumentCount();
+      
+    })
+
     // Ping MongoDB deployment
     await client.db("admin").command({ ping: 1 });
     console.log(
