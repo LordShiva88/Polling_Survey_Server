@@ -1,8 +1,10 @@
+// Import necessary modules
 const express = require("express");
 const cors = require("cors");
 const app = express();
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT || 5000;
 
@@ -10,8 +12,10 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+// MongoDB connection URI
 const uri = `mongodb+srv://${process.env.DB_NAME}:${process.env.DB_PASS}@cluster0.rqtbidh.mongodb.net/?retryWrites=true&w=majority`;
 
+// Create a MongoDB client
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -20,12 +24,15 @@ const client = new MongoClient(uri, {
   },
 });
 
+// JWT secret key
 const jwt_secret = process.env.JWT_SECRET_KEY;
 
+// MongoDB connection and route handling
 async function run() {
   try {
     await client.connect();
 
+    // MongoDB collections
     const userCollection = client.db("Polling-survey").collection("users");
     const reviewCollection = client.db("Polling-survey").collection("review");
     const surveysCollection = client.db("Polling-survey").collection("surveys");
@@ -33,6 +40,7 @@ async function run() {
       .db("Polling-survey")
       .collection("comments");
 
+    // Middleware to verify JWT token
     const verifyToken = (req, res, next) => {
       if (!req.headers.authorization) {
         return res.status(401).send({ message: "unauthorized access" });
@@ -45,6 +53,7 @@ async function run() {
       });
     };
 
+    // Middleware to verify admin role
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
       const query = { email: email };
@@ -56,6 +65,7 @@ async function run() {
       next();
     };
 
+    // Route to generate JWT token
     app.post("/api/v1/jwt", async (req, res) => {
       const user = req.body;
       const payload = { email: user.email };
@@ -63,6 +73,7 @@ async function run() {
       res.send(token);
     });
 
+    // Route to create a new user
     app.post("/api/v1/users", async (req, res) => {
       const user = req.body;
       const filter = { email: user.email };
@@ -74,6 +85,7 @@ async function run() {
       res.send(result);
     });
 
+    // Route to get user role based on email
     app.get("/users/role/:email", verifyToken, async (req, res) => {
       const userEmail = req.params.email;
       if (userEmail !== req.decoded.email) {
@@ -86,13 +98,14 @@ async function run() {
         role = "Admin";
       } else if (user?.role === "Surveyor") {
         role = "Surveyor";
-      } else if (user?.role === "Pro") {
-        role = "Pro";
+      } else if (user?.role === "Pro User") {
+        role = "Pro User";
       }
       res.send({ userRole: role });
     });
 
-    app.get("/api/v1/users", verifyToken, verifyAdmin, async (req, res) => {
+    // Route to get all users (admin only)
+    app.get("/api/v1/users", verifyToken, async (req, res) => {
       const role = req.query.role;
       let query = {};
       if (role !== "all") {
@@ -102,6 +115,7 @@ async function run() {
       res.send(result);
     });
 
+    // Route to update user role
     app.patch("/api/v1/users/:id", async (req, res) => {
       const id = req.params.id;
       const role = req.body;
@@ -115,6 +129,19 @@ async function run() {
       res.send(result);
     });
 
+    app.patch("/api/v1/users", async (req, res) => {
+      const {role, email} = req.body;
+      const query = { email: email };
+      const updateDoc = {
+        $set: {
+          role: role,
+        },
+      };
+      const result = await userCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
+    // Route to delete a user
     app.delete("/api/v1/users/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -122,22 +149,41 @@ async function run() {
       res.send(result);
     });
 
+    // Route to get reviews
     app.get("/api/v1/review", async (req, res) => {
       const result = await reviewCollection.find().toArray();
       res.send(result);
     });
 
+    // Route to create a new survey
     app.post("/api/v1/surveys", async (req, res) => {
       const survey = req.body;
       const result = await surveysCollection.insertOne(survey);
       res.send(result);
     });
 
+    // Route to get surveys with optional filters and sorting
     app.get("/api/v1/surveys", async (req, res) => {
-      const result = await surveysCollection.find().toArray();
+      const { category, vote, title } = req.query;
+      const filter = {};
+      if (category) filter.category = category;
+      if (title) filter.title = title;
+
+      let sortOptions = {};
+      if (vote === "Descending") {
+        sortOptions = { like: -1 };
+      }
+      if (vote === "Ascending") {
+        sortOptions = { like: 1 };
+      }
+      const result = await surveysCollection
+        .find(filter)
+        .sort(sortOptions)
+        .toArray();
       res.send(result);
     });
 
+    // Route to update a survey by ID (admin)
     app.put("/api/v1/surveys/admin/:id", async (req, res) => {
       const id = req.params.id;
       const { comment: adminFeedback, status } = req.body;
@@ -151,13 +197,24 @@ async function run() {
       res.send(result);
     });
 
+    // Route to participate in a survey (like, dislike, report)
     app.patch("/api/v1/surveys/:id", async (req, res) => {
       const id = req.params.id;
-      const { status } = req.body;
+      const { status, participantEmail } = req.body;
       const query = { _id: new ObjectId(id) };
+
+      const survey = await surveysCollection.findOne(query);
+      if (survey.participantEmail === participantEmail) {
+        return res.send({
+          message: "You have already Participated in this survey",
+        });
+      }
       let updateFields = {};
       if (status === "like") {
-        updateFields = { $inc: { like: 1 } };
+        updateFields = {
+          $inc: { like: 1 },
+          $set: { participantEmail: participantEmail },
+        };
       } else if (status === "dislike") {
         updateFields = { $inc: { dislike: 1 } };
       } else if (status === "report") {
@@ -167,6 +224,7 @@ async function run() {
       res.send(result);
     });
 
+    // Route to add comments to a survey
     app.post("/api/v1/surveys/comments", async (req, res) => {
       const id = req.params.id;
       const data = req.body;
@@ -182,11 +240,13 @@ async function run() {
       res.send(result);
     });
 
+    // Route to get comments for all surveys
     app.get("/api/v1/surveys/comments", async (req, res) => {
       const result = await commentsCollection.find().toArray();
       res.send(result);
     });
 
+    // Route to update a survey by surveyor
     app.put("/api/v1/surveys/surveyor/:id", async (req, res) => {
       const id = req.params.id;
       const newSurvey = req.body;
@@ -202,6 +262,7 @@ async function run() {
       res.send(result);
     });
 
+    // Route to get surveys by user email
     app.get("/api/v1/surveys/:email", async (req, res) => {
       const email = req.params.email;
       const query = { email: email };
@@ -209,6 +270,7 @@ async function run() {
       res.send(result);
     });
 
+    // Route to delete a survey by ID
     app.delete("/api/v1/surveys/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -216,6 +278,21 @@ async function run() {
       res.send(result);
     });
 
+    // Payment
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ['card']
+      })
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+
+    // Ping MongoDB deployment
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
@@ -223,11 +300,14 @@ async function run() {
   } finally {
   }
 }
+
+// Run the MongoDB connection and start the server
 run().catch(console.dir);
 app.get("/", (req, res) => {
   res.send("Polling Survey is Running");
 });
 
+// Start the server
 app.listen(port, () => {
   console.log(`Server is running with port ${port}`);
 });
