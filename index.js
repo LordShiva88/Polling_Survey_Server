@@ -27,15 +27,15 @@ const client = new MongoClient(uri, {
 // JWT secret key
 const jwt_secret = process.env.JWT_SECRET_KEY;
 
-// MongoDB connection and route handling
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     // MongoDB collections
     const userCollection = client.db("Polling-survey").collection("users");
     const reviewCollection = client.db("Polling-survey").collection("review");
     const surveysCollection = client.db("Polling-survey").collection("surveys");
+    const paymentsCollection = client.db("Polling-survey").collection("payments");
     const commentsCollection = client
       .db("Polling-survey")
       .collection("comments");
@@ -105,7 +105,7 @@ async function run() {
     });
 
     // Route to get all users (admin only)
-    app.get("/api/v1/users", verifyToken, async (req, res) => {
+    app.get("/api/v1/users", verifyToken, verifyAdmin, async (req, res) => {
       const role = req.query.role;
       let query = {};
       if (role !== "all") {
@@ -116,7 +116,7 @@ async function run() {
     });
 
     // Route to update user role
-    app.patch("/api/v1/users/:id", async (req, res) => {
+    app.patch("/api/v1/users/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const role = req.body;
       const query = { _id: new ObjectId(id) };
@@ -129,7 +129,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/api/v1/users", async (req, res) => {
+    app.patch("/api/v1/users",verifyToken, async (req, res) => {
       const {role, email} = req.body;
       const query = { email: email };
       const updateDoc = {
@@ -142,7 +142,7 @@ async function run() {
     });
 
     // Route to delete a user
-    app.delete("/api/v1/users/:id", async (req, res) => {
+    app.delete("/api/v1/users/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await userCollection.deleteOne(query);
@@ -184,7 +184,7 @@ async function run() {
     });
 
     // Route to update a survey by ID (admin)
-    app.put("/api/v1/surveys/admin/:id", async (req, res) => {
+    app.put("/api/v1/surveys/admin/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const { comment: adminFeedback, status } = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -198,7 +198,7 @@ async function run() {
     });
 
     // Route to participate in a survey (like, dislike, report)
-    app.patch("/api/v1/surveys/:id", async (req, res) => {
+    app.patch("/api/v1/surveys/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const { status, participantEmail } = req.body;
       const query = { _id: new ObjectId(id) };
@@ -225,7 +225,7 @@ async function run() {
     });
 
     // Route to add comments to a survey
-    app.post("/api/v1/surveys/comments", async (req, res) => {
+    app.post("/api/v1/surveys/comments", verifyToken, async (req, res) => {
       const id = req.params.id;
       const data = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -247,7 +247,7 @@ async function run() {
     });
 
     // Route to update a survey by surveyor
-    app.put("/api/v1/surveys/surveyor/:id", async (req, res) => {
+    app.put("/api/v1/surveys/surveyor/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const newSurvey = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -292,19 +292,28 @@ async function run() {
       });
     });
 
+    app.post('/payment', verifyToken, async(req, res)=>{
+      const paymentInfo = req.body;
+      const result = await paymentsCollection.insertOne(paymentInfo)
+      res.send(result)
+    })
+
+    app.get('/payment',  verifyToken, verifyAdmin, async(req, res)=>{
+      const result = await paymentsCollection.find().toArray()
+      res.send(result)
+    })
 
     // stats or analytics
     app.get('/admin-states', async(req, res)=>{
       const users = await userCollection.estimatedDocumentCount();
       const survey = await surveysCollection.estimatedDocumentCount();
-      
     })
 
     // Ping MongoDB deployment
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
   }
 }
